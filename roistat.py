@@ -393,12 +393,15 @@ def enrich(rows, hier):
     return n
 
 def allocate_spend(leads, budget, meta):
-    """1) Meta'да ном мос келса — аниқ харажат. 2) Акс ҳолда бюджет шитси."""
+    """1) Meta'да ном мос келса — аниқ харажат.
+    2) Қолгани — бюджет шитсидан, ЛЕКИН Meta аллақачон олган пул чегирилади
+       (акс ҳолда битта харажат икки марта ҳисобланади)."""
     by_ad = defaultdict(list)
     for L in leads:
         by_ad[(L["date"], norm(L["creative"]))].append(L)
 
     meta_used, matched = 0.0, 0
+    meta_by_grp = defaultdict(float)          # гуруҳ бўйича Meta'дан кетган пул
     for k, rows in by_ad.items():
         m = meta.get(k)
         if m and m["spend"] > 0:
@@ -408,27 +411,31 @@ def allocate_spend(leads, budget, meta):
             for L in rows:
                 L["spend"] = per
                 L["from_meta"] = 1
+                gk = (L["date"], map_dir(L["direction"]), map_targ(L["targetolog"]))
+                meta_by_grp[gk] += per
 
     grp = defaultdict(list)
     for L in leads:
         if not L["from_meta"]:
             grp[(L["date"], map_dir(L["direction"]), map_targ(L["targetolog"]))].append(L)
+
     bud_used = 0.0
     for key, rows in grp.items():
-        sp = budget.get(key, 0.0)
-        if sp:
-            bud_used += sp
-            per = sp / len(rows)
+        left = budget.get(key, 0.0) - meta_by_grp.get(key, 0.0)   # ← чегириш
+        if left > 0:
+            bud_used += left
+            per = left / len(rows)
             for L in rows:
                 L["spend"] = per
 
+    total_alloc = meta_used + bud_used
     meta_total = sum(v["spend"] for v in meta.values())
-    log.info("Харажат: Meta $%.2f / $%.2f (%d кун-креатив) + бюджет $%.2f",
-             meta_used, meta_total, matched, bud_used)
+    log.info("Харажат: Meta $%.2f (%d кун-креатив) + бюджет $%.2f = ЖАМИ $%.2f",
+             meta_used, matched, bud_used, total_alloc)
     if meta_total > 0:
         pct = meta_used / meta_total * 100
         log.info("Meta мослиги: %.1f%%", pct)
-        if pct < 70:
+        if pct < 90:
             miss = defaultdict(float)
             for (d, ad), v in meta.items():
                 if (d, ad) not in by_ad:
@@ -437,7 +444,6 @@ def allocate_spend(leads, budget, meta):
             for ad, s in sorted(miss.items(), key=lambda x: -x[1])[:15]:
                 log.warning("   $%8.2f  %s", s, ad)
     return leads
-
 # ══════════════════════════ КУРС ════════════════════════════════════════
 def usd_rate():
     try:
