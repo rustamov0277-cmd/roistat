@@ -1,5 +1,5 @@
 """
-ROISTAT — Sinolife / Zextra сквозная аналитика  (v2)
+ROISTAT — Sinolife / Zextra сквозная аналитика  (v3)
 Sheets (лидлар черновик+архив, hisobot черновик+архив, бюджет) → HTML → GitHub Pages
 
 Ишга тушириш:
@@ -26,10 +26,13 @@ SH_ORDERS     = os.environ.get("RS_SHEET_ORDERS", "")
 SH_ORDERS_ARC = os.environ.get("RS_SHEET_ORDERS_ARCHIVE", "")
 SH_BUDGET     = os.environ.get("RS_SHEET_BUDGET", "")
 
-LEAD_TABS  = [t.strip() for t in os.environ.get(
-                "RS_LEAD_TABS", "CollagenMarine,Zextra,Сммщик ии,Веб сайт").split(",") if t.strip()]
-ORDERS_TAB = os.environ.get("RS_ORDERS_TAB", "").strip()
-BUDGET_TAB = os.environ.get("RS_BUDGET_TAB", "").strip()
+# Варақ номлари: черновик ва архивда ҳар хил бўлиши мумкин
+LEAD_TABS     = [t.strip() for t in os.environ.get(
+                    "RS_LEAD_TABS", "CollagenMarine,Zextra,Сммщик ии,Веб сайт").split(",") if t.strip()]
+LEAD_TABS_ARC = [t.strip() for t in os.environ.get(
+                    "RS_LEAD_TABS_ARCHIVE", "").split(",") if t.strip()] or LEAD_TABS
+ORDERS_TAB    = os.environ.get("RS_ORDERS_TAB", "").strip()
+BUDGET_TAB    = os.environ.get("RS_BUDGET_TAB", "").strip()
 
 GH_TOKEN = os.environ.get("RS_GITHUB_TOKEN", "")
 GH_USER  = os.environ.get("RS_GITHUB_USER", "rustamov0277-cmd")
@@ -42,8 +45,9 @@ TG_ADMINS = [x.strip() for x in os.environ.get("RS_ADMIN_IDS", "").split(",") if
 USD_FALLBACK  = float(os.environ.get("RS_USD_FALLBACK", "12650"))
 SNAPSHOT_FILE = "/root/roistat/snapshot.json"
 OUT_FILE      = "/root/roistat/index.html"
-FRESH_DAYS    = 7                                        # "пишмаган" кунлар
+FRESH_DAYS    = 7                                            # "пишмаган" кунлар
 DAILY_DAYS    = int(os.environ.get("RS_DAILY_DAYS", "180"))  # шунча кун кунлик, эскиси ойлик
+MIN_DATE      = os.environ.get("RS_MIN_DATE", "").strip()    # шу санадан олдингиси олинмайди
 
 # ══════════════════════════════ ЁРДАМЧИЛАР ════════════════════════════════
 def norm(s):
@@ -114,7 +118,9 @@ def txt(row, idx, default):
     v = (cell(row, idx) or "").strip()
     return v if v else default
 
-# ── Йўналиш мослаштириш: RS_DIR_MAP="CollagenMarine=Collagen,Веб сайт=веб" ──
+NA = "— белгиланмаган —"
+
+# ── Йўналиш мослаштириш: RS_DIR_MAP="Eski nom=Yangi nom,..." ──
 DIR_MAP = {}
 for _pair in os.environ.get("RS_DIR_MAP", "").split(","):
     if "=" in _pair:
@@ -124,6 +130,13 @@ for _pair in os.environ.get("RS_DIR_MAP", "").split(","):
 def map_dir(d):
     n = norm(d)
     return DIR_MAP.get(n, n)
+
+def map_targ(t):
+    """Таргетологсиз лид бюджетдаги 'organic' устунига мосланади."""
+    n = norm(t)
+    if not n or n == norm(NA) or n in ("-", "—"):
+        return "organic"
+    return n
 
 # ══════════════════════════════ GOOGLE SHEETS ═════════════════════════════
 _GC = None
@@ -189,7 +202,6 @@ def parse_leads(values, direction):
     i_targ  = pick(h, "таргетолог")
     i_form  = pick(h, "форма")
     i_age   = pick(h, "кассалик", "ёш оралиғи", "ёш оралиги", "ёш")
-    NA = "— белгиланмаган —"
     out = []
     for r in values[1:]:
         d = parse_date(cell(r, i_date))
@@ -220,7 +232,7 @@ def load_leads():
         hot += rows
     hot_dates = {r["date"] for r in hot}
     arc = []
-    for tab in LEAD_TABS:
+    for tab in LEAD_TABS_ARC:
         rows = parse_leads(read_tab(SH_LEADS_ARC, tab), tab)
         kept = [r for r in rows if r["date"] not in hot_dates]
         if rows:
@@ -247,7 +259,6 @@ def parse_orders(values):
     i_targ  = pick(h, "таргетолог")
     i_rop   = pick(h, "роплар", "проект роп")
     i_form  = pick(h, "форма")
-    NA = "— белгиланмаган —"
     out = []
     for r in values[1:]:
         d = parse_date(cell(r, i_date))
@@ -314,32 +325,40 @@ def load_budget():
     return dict(out)
 
 def allocate_spend(leads, budget):
-    """(сана, йўналиш, таргетолог) харажати ўша гуруҳ лидларига тенг тақсимланади."""
+    """(сана, йўналиш, таргетолог) харажати ўша гуруҳ лидларига тенг тақсимланади.
+    Асосий кўрсаткич — гуруҳ сони эмас, ТАҚСИМЛАНГАН ПУЛ фоизи."""
+    if not budget:
+        return leads
     groups = defaultdict(list)
     for L in leads:
-        groups[(L["date"], map_dir(L["direction"]), norm(L["targetolog"]))].append(L)
-    matched = 0
+        groups[(L["date"], map_dir(L["direction"]), map_targ(L["targetolog"]))].append(L)
+
+    matched, used = 0, 0.0
     for key, rows in groups.items():
         spend = budget.get(key, 0.0)
         if spend:
             matched += 1
+            used += spend
             per = spend / len(rows)
             for L in rows:
                 L["spend"] = per
-    total = sum(L["spend"] for L in leads)
-    log.info("Бюджет мосланди: %d / %d гуруҳ, тақсимланди $%.2f",
-             matched, len(groups), total)
 
-    if budget and matched < len(groups) * 0.3:
-        log.warning("⚠️ МОСЛИК ПАСТ — номларни солиштиринг:")
+    total = sum(budget.values())
+    pct = (used / total * 100) if total else 0
+    log.info("Бюджет тақсимланди: $%.2f / $%.2f (%.1f%%) · гуруҳ %d/%d",
+             used, total, pct, matched, len(groups))
+
+    if pct < 80:
+        lost = sorted(((v, k) for k, v in budget.items() if k not in groups),
+                      reverse=True)[:10]
+        log.warning("⚠️ Бюджетнинг %.1f%% и мосланмади. Энг катта мосланмаганлар:", 100 - pct)
+        for v, k in lost:
+            log.warning("   %s | %s | %s → $%.2f", k[0], k[1], k[2], v)
         log.warning("  ЛИД йўналишлари   : %s",
                     sorted({map_dir(L["direction"]) for L in leads}))
         log.warning("  БЮДЖЕТ йўналишлари: %s", sorted({g for _, g, _ in budget}))
-        log.warning("  ЛИД таргетологлари: %s",
-                    sorted({norm(L["targetolog"]) for L in leads})[:20])
-        log.warning("  БЮДЖЕТ таргетолог.: %s", sorted({t for _, _, t in budget}))
         log.warning("  → фарқни RS_DIR_MAP билан тузатинг, масалан:")
-        log.warning("    export RS_DIR_MAP=\"CollagenMarine=Collagen\"")
+        log.warning('    export RS_DIR_MAP="EskiNom=YangiNom"')
     return leads
 
 # ══════════════════════════════ КУРС ══════════════════════════════════════
@@ -425,8 +444,7 @@ def build_payload(leads, orders, daily_from):
     dims["days"] = [{"d": d, "k": d, **{kk: round(vv, 2) for kk, vv in m.items()}}
                     for d, m in acc.items()]
 
-    n = sum(len(v) for v in dims.values())
-    log.info("Кесим қаторлари: %d", n)
+    log.info("Кесим қаторлари: %d", sum(len(v) for v in dims.values()))
     return dims
 
 # ══════════════════════════════ НАЗОРАТ ═══════════════════════════════════
@@ -596,6 +614,7 @@ function diffD(a,b){return Math.round((s2d(b)-s2d(a))/86400000)}
 function ru(s){var p=s.split('-');return p[2]+'.'+p[1]+'.'+p[0]}
 function monLab(s){var p=s.split('-');return MON[parseInt(p[1],10)-1]+' '+p[0]}
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+function clamp(s){return s<DATA.minDate?DATA.minDate:s}
 
 function period(){
   var t=DATA.today,f,to;
@@ -606,6 +625,7 @@ function period(){
   else if(RANGE==='prevmonth'){var p=addD(mStart(t),-1);f=mStart(p);to=mEnd(p)}
   else if(RANGE==='custom'&&CF&&CT){f=CF;to=CT}
   else{f=DATA.minDate;to=DATA.maxDate}
+  f=clamp(f);
   var len=diffD(f,to)+1;
   return {f:f,to:to,pf:addD(f,-len),pt:addD(f,-1)};
 }
@@ -756,7 +776,9 @@ document.getElementById('cUSD').onclick=function(){MODE='usd';
 
 document.getElementById('upd').textContent=DATA.updated;
 document.getElementById('rate').textContent=n0(DATA.rate)+' сўм ('+DATA.rateDate+')';
-document.getElementById('f1').value=mStart(DATA.today);
+document.getElementById('f1').min=DATA.minDate;
+document.getElementById('f2').min=DATA.minDate;
+document.getElementById('f1').value=clamp(mStart(DATA.today));
 document.getElementById('f2').value=DATA.today;
 tabs();render();
 setTimeout(function(){location.reload()},900000);
@@ -819,8 +841,18 @@ if __name__ == "__main__":
     log.info("=== ROISTAT бошланди ===")
     leads  = load_leads()
     orders = load_orders()
+
+    if MIN_DATE:
+        n1, n2 = len(leads), len(orders)
+        leads  = [r for r in leads  if r["date"] >= MIN_DATE]
+        orders = [r for r in orders if r["date"] >= MIN_DATE]
+        log.info("Сана филтри %s: лид %d→%d, буюртма %d→%d",
+                 MIN_DATE, n1, len(leads), n2, len(orders))
+
     budget = load_budget()
-    leads  = allocate_spend(leads, budget)
+    if MIN_DATE:
+        budget = {k: v for k, v in budget.items() if k[0] >= MIN_DATE}
+    leads = allocate_spend(leads, budget)
 
     if not leads and not orders:
         sys.exit("❌ Маълумот ўқилмади — шитс ҳаволаси ва сервис аккаунт рухсатини текширинг")
