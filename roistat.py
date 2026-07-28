@@ -1,5 +1,5 @@
 """
-ROISTAT — Sinolife / Zextra сквозная аналитика
+ROISTAT — Sinolife / Zextra сквозная аналитика  (v2)
 Sheets (лидлар черновик+архив, hisobot черновик+архив, бюджет) → HTML → GitHub Pages
 
 Ишга тушириш:
@@ -27,7 +27,7 @@ SH_ORDERS_ARC = os.environ.get("RS_SHEET_ORDERS_ARCHIVE", "")
 SH_BUDGET     = os.environ.get("RS_SHEET_BUDGET", "")
 
 LEAD_TABS  = [t.strip() for t in os.environ.get(
-                "RS_LEAD_TABS", "collagen,zextra,ии,веб сайт").split(",") if t.strip()]
+                "RS_LEAD_TABS", "CollagenMarine,Zextra,Сммщик ии,Веб сайт").split(",") if t.strip()]
 ORDERS_TAB = os.environ.get("RS_ORDERS_TAB", "").strip()
 BUDGET_TAB = os.environ.get("RS_BUDGET_TAB", "").strip()
 
@@ -42,7 +42,8 @@ TG_ADMINS = [x.strip() for x in os.environ.get("RS_ADMIN_IDS", "").split(",") if
 USD_FALLBACK  = float(os.environ.get("RS_USD_FALLBACK", "12650"))
 SNAPSHOT_FILE = "/root/roistat/snapshot.json"
 OUT_FILE      = "/root/roistat/index.html"
-FRESH_DAYS    = 7
+FRESH_DAYS    = 7                                        # "пишмаган" кунлар
+DAILY_DAYS    = int(os.environ.get("RS_DAILY_DAYS", "180"))  # шунча кун кунлик, эскиси ойлик
 
 # ══════════════════════════════ ЁРДАМЧИЛАР ════════════════════════════════
 def norm(s):
@@ -113,6 +114,17 @@ def txt(row, idx, default):
     v = (cell(row, idx) or "").strip()
     return v if v else default
 
+# ── Йўналиш мослаштириш: RS_DIR_MAP="CollagenMarine=Collagen,Веб сайт=веб" ──
+DIR_MAP = {}
+for _pair in os.environ.get("RS_DIR_MAP", "").split(","):
+    if "=" in _pair:
+        _a, _b = _pair.split("=", 1)
+        DIR_MAP[norm(_a)] = norm(_b)
+
+def map_dir(d):
+    n = norm(d)
+    return DIR_MAP.get(n, n)
+
 # ══════════════════════════════ GOOGLE SHEETS ═════════════════════════════
 _GC = None
 
@@ -124,15 +136,36 @@ def _gc():
         _GC = gspread.authorize(creds)
     return _GC
 
+def _find_ws(book, tab):
+    """Варақни номи бўйича топади. Аниқ мос келмаса — бўшлиқ ва катта-кичик
+    ҳарфни ҳисобга олмай қидиради. Топилмаса — мавжудларини логга ёзади."""
+    if not tab:
+        return book.get_worksheet(0)
+    want = norm(tab).replace(" ", "")
+    sheets = book.worksheets()
+    for ws in sheets:
+        if norm(ws.title).replace(" ", "") == want:
+            return ws
+    log.error("❌ Варақ топилмади: '%s' | Мавжудлари: %s",
+              tab, [w.title for w in sheets])
+    return None
+
 def read_tab(sheet_id, tab=None):
-    """Варақни ўқийди. tab бўш бўлса — биринчи варақ. 429 да қайта уринади."""
+    """Варақни ўқийди. IMPORTRANGE қийматлари оддий қиймат бўлиб келади."""
     if not sheet_id:
         return []
     for attempt in range(3):
         try:
             book = _gc().open_by_key(sheet_id)
-            ws = book.worksheet(tab) if tab else book.get_worksheet(0)
-            return ws.get_all_values()
+            ws = _find_ws(book, tab)
+            if ws is None:
+                return []
+            vals = ws.get_all_values()
+            bad = sum(1 for r in vals[:50] for c in r if "#REF" in str(c))
+            if bad > 5:
+                log.warning("⚠️ '%s' да #REF! кўп — IMPORTRANGE рухсати "
+                            "берилмаган бўлиши мумкин", tab)
+            return vals
         except Exception as e:
             if "429" in str(e) and attempt < 2:
                 log.warning("429 — 30 сония кутаман (%s / %s)", sheet_id[:8], tab)
@@ -188,9 +221,11 @@ def load_leads():
     hot_dates = {r["date"] for r in hot}
     arc = []
     for tab in LEAD_TABS:
-        for r in parse_leads(read_tab(SH_LEADS_ARC, tab), tab):
-            if r["date"] not in hot_dates:
-                arc.append(r)
+        rows = parse_leads(read_tab(SH_LEADS_ARC, tab), tab)
+        kept = [r for r in rows if r["date"] not in hot_dates]
+        if rows:
+            log.info("  лид/архив '%s': %d (олинди %d)", tab, len(rows), len(kept))
+        arc += kept
     log.info("Лидлар жами: черновик=%d, архив=%d", len(hot), len(arc))
     return hot + arc
 
@@ -250,8 +285,8 @@ def load_orders():
 
 # ══════════════════════════════ БЮДЖЕТ ════════════════════════════════════
 def load_budget():
-    """Икки қаторли сарлавҳа: 1-қатор = йўналиш (Collagen/Zextra),
-    2-қатор = таргетолог, 3-қатордан = сана × қиймат ($)."""
+    """Икки қаторли сарлавҳа: 1-қатор = йўналиш, 2-қатор = таргетолог,
+    3-қатордан = сана × қиймат ($)."""
     v = read_tab(SH_BUDGET, BUDGET_TAB or None)
     if len(v) < 3:
         log.warning("Бюджет шитси бўш ёки топилмади")
@@ -269,7 +304,7 @@ def load_budget():
             continue
         for i in range(1, len(r)):
             t = norm(cell(targs, i))
-            g = norm(groups[i]) if i < len(groups) else ""
+            g = map_dir(groups[i]) if i < len(groups) else ""
             if not t or not g:
                 continue
             val = _num(r[i])
@@ -282,7 +317,7 @@ def allocate_spend(leads, budget):
     """(сана, йўналиш, таргетолог) харажати ўша гуруҳ лидларига тенг тақсимланади."""
     groups = defaultdict(list)
     for L in leads:
-        groups[(L["date"], norm(L["direction"]), norm(L["targetolog"]))].append(L)
+        groups[(L["date"], map_dir(L["direction"]), norm(L["targetolog"]))].append(L)
     matched = 0
     for key, rows in groups.items():
         spend = budget.get(key, 0.0)
@@ -291,9 +326,20 @@ def allocate_spend(leads, budget):
             per = spend / len(rows)
             for L in rows:
                 L["spend"] = per
-    log.info("Бюджет мосланди: %d / %d гуруҳ", matched, len(groups))
-    if groups and matched == 0:
-        log.error("⚠️ БИРОРТА ГУРУҲ МОСЛАНМАДИ — таргетолог/йўналиш номлари фарқ қиляпти!")
+    total = sum(L["spend"] for L in leads)
+    log.info("Бюджет мосланди: %d / %d гуруҳ, тақсимланди $%.2f",
+             matched, len(groups), total)
+
+    if budget and matched < len(groups) * 0.3:
+        log.warning("⚠️ МОСЛИК ПАСТ — номларни солиштиринг:")
+        log.warning("  ЛИД йўналишлари   : %s",
+                    sorted({map_dir(L["direction"]) for L in leads}))
+        log.warning("  БЮДЖЕТ йўналишлари: %s", sorted({g for _, g, _ in budget}))
+        log.warning("  ЛИД таргетологлари: %s",
+                    sorted({norm(L["targetolog"]) for L in leads})[:20])
+        log.warning("  БЮДЖЕТ таргетолог.: %s", sorted({t for _, _, t in budget}))
+        log.warning("  → фарқни RS_DIR_MAP билан тузатинг, масалан:")
+        log.warning("    export RS_DIR_MAP=\"CollagenMarine=Collagen\"")
     return leads
 
 # ══════════════════════════════ КУРС ══════════════════════════════════════
@@ -334,13 +380,17 @@ def _empty():
     return {"leads": 0, "clean": 0, "kval": 0, "spend": 0.0,
             "orders": 0, "fact1": 0.0, "fact2": 0.0, "sold": 0}
 
-def build_payload(leads, orders):
+def build_payload(leads, orders, daily_from):
+    """daily_from дан кейинги кунлар — кунлик, эскилари — ойлик (ой 1-санасига)."""
+    def bkt(d):
+        return d if d >= daily_from else d[:8] + "01"
+
     dims = {}
     for did, label, lf, of in DIMS:
         acc = defaultdict(_empty)
         if lf:
             for L in leads:
-                a = acc[(L["date"], L[lf])]
+                a = acc[(bkt(L["date"]), L[lf])]
                 a["leads"] += 1
                 if not L["is_dirty"]:
                     a["clean"] += 1
@@ -349,7 +399,7 @@ def build_payload(leads, orders):
                 a["spend"] += L["spend"]
         if of:
             for O in orders:
-                a = acc[(O["date"], O[of])]
+                a = acc[(bkt(O["date"]), O[of])]
                 a["orders"] += 1
                 a["fact1"]  += O["fact1"]
                 a["fact2"]  += O["fact2"]
@@ -357,10 +407,9 @@ def build_payload(leads, orders):
         dims[did] = [{"d": d, "k": k, **{kk: round(vv, 2) for kk, vv in m.items()}}
                      for (d, k), m in acc.items()]
 
-    # кунлик кесим ("Кунлар" вкладкаси)
     acc = defaultdict(_empty)
     for L in leads:
-        a = acc[L["date"]]
+        a = acc[bkt(L["date"])]
         a["leads"] += 1
         if not L["is_dirty"]:
             a["clean"] += 1
@@ -368,13 +417,16 @@ def build_payload(leads, orders):
             a["kval"] += 1
         a["spend"] += L["spend"]
     for O in orders:
-        a = acc[O["date"]]
+        a = acc[bkt(O["date"])]
         a["orders"] += 1
         a["fact1"]  += O["fact1"]
         a["fact2"]  += O["fact2"]
         a["sold"]   += O["sold"]
     dims["days"] = [{"d": d, "k": d, **{kk: round(vv, 2) for kk, vv in m.items()}}
                     for d, m in acc.items()]
+
+    n = sum(len(v) for v in dims.values())
+    log.info("Кесим қаторлари: %d", n)
     return dims
 
 # ══════════════════════════════ НАЗОРАТ ═══════════════════════════════════
@@ -468,6 +520,7 @@ tr:last-child td{border-bottom:none}
 tbody tr{transition:background .12s}
 tbody tr:hover{background:#1a1a1a}
 tbody tr.fresh td{opacity:.55}
+tbody tr.mon td{color:#9aa}
 td.name{font-weight:600}
 td.rank{color:var(--mut2);font-size:12px;width:38px;text-align:center}
 tfoot td{padding:13px 12px;font-weight:700;font-size:14px;background:#101010;
@@ -531,6 +584,8 @@ var MODE='uzs', RANGE='month', DIM='targetolog', CF=null, CT=null;
 var DIMLAB={};
 var HAS_LEAD={targetolog:1,creative:1,form:1,source:1,direction:1,seller:1,
               registrator:1,age:1,days:1};
+var MON=['Январ','Феврал','Март','Апрел','Май','Июн','Июл','Август',
+         'Сентябр','Октябр','Ноябр','Декабр'];
 
 function s2d(s){return new Date(s+'T00:00:00Z')}
 function d2s(d){return d.toISOString().slice(0,10)}
@@ -539,6 +594,7 @@ function mStart(s){return s.slice(0,8)+'01'}
 function mEnd(s){var d=s2d(s);return d2s(new Date(Date.UTC(d.getUTCFullYear(),d.getUTCMonth()+1,0)))}
 function diffD(a,b){return Math.round((s2d(b)-s2d(a))/86400000)}
 function ru(s){var p=s.split('-');return p[2]+'.'+p[1]+'.'+p[0]}
+function monLab(s){var p=s.split('-');return MON[parseInt(p[1],10)-1]+' '+p[0]}
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
 
 function period(){
@@ -632,9 +688,13 @@ function table(p){
   if(lead)h+='<th>Лид</th><th>Тоза</th><th>Сифат</th><th>CPL</th><th>Квал</th>';
   h+='<th>Заказ Ф1</th><th>Сотув Ф2</th><th>Выкуп</th><th>CPO</th><th>Ўрт.чек</th><th>ROMI</th></tr></thead><tbody>';
   for(var i=0;i<keys.length;i++){
-    var k=keys[i],x=met(m[k]),fr=isDays&&k>=DATA.freshFrom;
-    h+='<tr'+(fr?' class="fresh"':'')+'><td class="rank">'+(i+1)+'</td>'+
-       '<td class="name">'+(isDays?ru(k):esc(k))+(fr?' ⏳':'')+'</td>'+
+    var k=keys[i],x=met(m[k]);
+    var isMon=isDays&&k<DATA.dailyFrom;
+    var fr=isDays&&!isMon&&k>=DATA.freshFrom;
+    var lbl=isDays?(isMon?monLab(k)+' (ой)':ru(k)):esc(k);
+    h+='<tr'+(fr?' class="fresh"':(isMon?' class="mon"':''))+'>'+
+       '<td class="rank">'+(i+1)+'</td>'+
+       '<td class="name">'+lbl+(fr?' ⏳':'')+'</td>'+
        '<td>'+mU(x.spend)+'</td>';
     if(lead)h+='<td>'+n0(x.leads)+'</td><td>'+n0(x.clean)+'</td><td>'+bdg(x.quality,80,60)+'</td>'+
                '<td>'+mU(x.cpl)+'</td><td>'+n0(x.kval)+'</td>';
@@ -671,7 +731,8 @@ function render(){
     : '';
   document.getElementById('hint').innerHTML=
     'Сифат = тоза лид ÷ жами лид · Выкуп = Факт2 ÷ Факт1 · ROMI = Факт2 ÷ харажат · '+
-    'CPL жами лиддан, конверсия тоза лиддан ҳисобланади.';
+    'CPL жами лиддан, конверсия тоза лиддан ҳисобланади. · '+
+    '<span style="color:#9aa">'+ru(DATA.dailyFrom)+' дан эски даврлар ойлик жамланма.</span>';
   document.querySelectorAll('#tabs .btn').forEach(function(b){
     b.classList.toggle('on',b.dataset.d===DIM)});
   kpis(p);table(p);
@@ -701,7 +762,7 @@ tabs();render();
 setTimeout(function(){location.reload()},900000);
 </script></body></html>"""
 
-def generate_html(dims, rate, rate_date, min_d, max_d):
+def generate_html(dims, rate, rate_date, min_d, max_d, daily_from):
     today = datetime.now(TZ).strftime("%Y-%m-%d")
     payload = {
         "dims":      dims,
@@ -712,9 +773,11 @@ def generate_html(dims, rate, rate_date, min_d, max_d):
         "today":     today,
         "minDate":   min_d or today,
         "maxDate":   max_d or today,
+        "dailyFrom": daily_from,
         "freshFrom": (datetime.now(TZ) - timedelta(days=FRESH_DAYS - 1)).strftime("%Y-%m-%d"),
     }
-    return HTML.replace("__PAYLOAD__", json.dumps(payload, ensure_ascii=False))
+    return HTML.replace("__PAYLOAD__", json.dumps(payload, ensure_ascii=False,
+                                                  separators=(",", ":")))
 
 # ══════════════════════════════ GITHUB PAGES ══════════════════════════════
 def push_github(html):
@@ -765,12 +828,13 @@ if __name__ == "__main__":
     guard(leads, orders)
 
     rate, rate_date = usd_rate()
-    dims = build_payload(leads, orders)
+    daily_from = (datetime.now(TZ) - timedelta(days=DAILY_DAYS)).strftime("%Y-%m-%d")
+    dims = build_payload(leads, orders, daily_from)
 
     all_d = [r["date"] for r in leads] + [r["date"] for r in orders]
     min_d, max_d = (min(all_d), max(all_d)) if all_d else (None, None)
 
-    html = generate_html(dims, rate, rate_date, min_d, max_d)
+    html = generate_html(dims, rate, rate_date, min_d, max_d, daily_from)
     with open(OUT_FILE, "w", encoding="utf-8") as f:
         f.write(html)
     log.info("HTML: %s (%d КБ)", OUT_FILE, len(html) // 1024)
