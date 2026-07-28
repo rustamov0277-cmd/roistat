@@ -225,22 +225,23 @@ def parse_leads(values, direction):
     return out
 
 def load_leads():
-    hot = []
-    for tab in LEAD_TABS:
-        rows = parse_leads(read_tab(SH_LEADS, tab), tab)
-        log.info("  лид/черновик '%s': %d", tab, len(rows))
-        hot += rows
-    hot_dates = {r["date"] for r in hot}
-    arc = []
-    for tab in LEAD_TABS_ARC:
-        rows = parse_leads(read_tab(SH_LEADS_ARC, tab), tab)
-        kept = [r for r in rows if r["date"] not in hot_dates]
-        if rows:
-            log.info("  лид/архив '%s': %d (олинди %d)", tab, len(rows), len(kept))
-        arc += kept
-    log.info("Лидлар жами: черновик=%d, архив=%d", len(hot), len(arc))
-    return hot + arc
+    """Ҳар варақ АЛОҲИДА бирлаштирилади: черновикда бор сана ўша варақнинг
+    архивидан олинмайди (варақлар бир-бирига аралашмайди)."""
+    all_rows = []
+    for i, tab in enumerate(LEAD_TABS):
+        hot = parse_leads(read_tab(SH_LEADS, tab), tab)
+        log.info("  лид/черновик '%s': %d", tab, len(hot))
+        hot_dates = {r["date"] for r in hot}
 
+        arc_tab = LEAD_TABS_ARC[i] if i < len(LEAD_TABS_ARC) else tab
+        arc = parse_leads(read_tab(SH_LEADS_ARC, arc_tab), tab)
+        kept = [r for r in arc if r["date"] not in hot_dates]
+        if arc:
+            log.info("  лид/архив   '%s': %d (олинди %d)", arc_tab, len(arc), len(kept))
+        all_rows += hot + kept
+
+    log.info("Лидлар жами: %d", len(all_rows))
+    return all_rows
 # ══════════════════════════════ БУЮРТМАЛАР ════════════════════════════════
 def parse_orders(values):
     if len(values) < 2:
