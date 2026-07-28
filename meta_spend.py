@@ -3,13 +3,15 @@ META қатлами — Campaign / Ad set / Ad даражасида кунлик
 Business Manager'даги БАРЧА кабинетни ўзи топади.
 
 Кэш: /root/roistat/meta_spend.json
-  {"2026-07-25":[{"acc":"...","camp":"...","adset":"...","ad":"...",
-                  "spend":12.5,"impr":4200,"reach":3100,"clicks":130,"leads":8}]}
+  {"2026-07-25":[{"ad_id":"...","ad":"...","camp":"...","adset":"...",
+                  "acc":"...","spend":12.5,"impr":4200,"reach":3100,
+                  "clicks":130,"leads":8}]}
 
-Синаш:
-  python3 meta_spend.py --accounts          # кабинетлар топиладими
-  python3 meta_spend.py --days 3 --show ad  # креативлар ва нархлари
-  python3 meta_spend.py --days 40           # кэшни тўлдириш
+Ишлатиш:
+  python3 meta_spend.py --accounts        # кабинетлар топиладими
+  python3 meta_spend.py --days 3 --show ad
+  python3 meta_spend.py --rebuild         # БУТУН даврни қайта тортиш
+                                          # (номлар ўзгартирилгандан кейин!)
 """
 
 import os, sys, json, time, argparse, logging
@@ -25,7 +27,8 @@ TOKEN      = os.environ.get("META_ACCESS_TOKEN", "") or os.environ.get("RS_META_
 API_VER    = os.environ.get("RS_META_API", "v21.0")
 CACHE_FILE = os.environ.get("RS_META_CACHE", "/root/roistat/meta_spend.json")
 BM_ID      = os.environ.get("RS_META_BUSINESS_ID", "").strip()
-CHUNK_DAYS = int(os.environ.get("RS_META_CHUNK", "7"))   # сўровни неча кунга бўлиш
+MIN_DATE   = os.environ.get("RS_MIN_DATE", "").strip()
+CHUNK_DAYS = int(os.environ.get("RS_META_CHUNK", "7"))
 
 # ══════════════════════════════ HTTP ══════════════════════════════════════
 def _get(url, params=None, tries=4):
@@ -33,12 +36,11 @@ def _get(url, params=None, tries=4):
         url = url + ("&" if "?" in url else "?") + urllib.parse.urlencode(params)
     for attempt in range(tries):
         try:
-            req = urllib.request.Request(url, headers={"User-Agent": "roistat-meta/2.0"})
+            req = urllib.request.Request(url, headers={"User-Agent": "roistat-meta/3.0"})
             with urllib.request.urlopen(req, timeout=90) as r:
                 return json.loads(r.read().decode("utf-8"))
         except urllib.error.HTTPError as e:
             body = e.read().decode("utf-8", errors="ignore")
-            # 17 / 80000 = rate limit, 613 = too many calls
             if (e.code in (429, 500, 503) or '"code":17' in body or '"code":613' in body) \
                and attempt < tries - 1:
                 wait = 30 * (attempt + 1)
@@ -54,9 +56,8 @@ def _get(url, params=None, tries=4):
     return {}
 
 def _paged(url, params, cap=200):
-    out = []
+    out, pages = [], 0
     data = _get(url, params)
-    pages = 0
     while True:
         out += data.get("data", [])
         nxt = (data.get("paging") or {}).get("next")
@@ -68,7 +69,6 @@ def _paged(url, params, cap=200):
 
 # ══════════════════════════ 1. Кабинетлар ════════════════════════════════
 def discover_accounts():
-    """Business Manager'даги барча реклама кабинети."""
     if BM_ID:
         url = "https://graph.facebook.com/%s/%s/owned_ad_accounts" % (API_VER, BM_ID)
     else:
@@ -85,15 +85,14 @@ def discover_accounts():
         log.info("   %-22s %-4s %s%s", a["id"], a["cur"], a["name"][:40], mark)
     bad = [a for a in accs if a["cur"] != "USD"]
     if bad:
-        log.warning("⚠️ %d кабинет USD'да эмас — уларнинг харажати нотўғри "
-                    "қўшилади, айтинг курс қўшамиз", len(bad))
+        log.warning("⚠️ %d кабинет USD'да эмас — харажат нотўғри қўшилади", len(bad))
     return accs
 
 # ══════════════════════ 2. Кунлик × Ad даражаси ══════════════════════════
-FIELDS = ("date_start,campaign_name,adset_name,ad_name,"
-          "spend,impressions,reach,clicks,actions")
+FIELDS = ("date_start,campaign_id,campaign_name,adset_id,adset_name,"
+          "ad_id,ad_name,spend,impressions,reach,clicks,actions")
 
-def _daterange_chunks(since, until, n):
+def _chunks(since, until, n):
     a = datetime.strptime(since, "%Y-%m-%d").date()
     b = datetime.strptime(until, "%Y-%m-%d").date()
     while a <= b:
@@ -104,7 +103,7 @@ def _daterange_chunks(since, until, n):
 def fetch_account(acc, since, until):
     url = "https://graph.facebook.com/%s/%s/insights" % (API_VER, acc["id"])
     out = []
-    for s, u in _daterange_chunks(since, until, CHUNK_DAYS):
+    for s, u in _chunks(since, until, CHUNK_DAYS):
         rows = _paged(url, {
             "access_token": TOKEN,
             "time_range": json.dumps({"since": s, "until": u}),
@@ -118,20 +117,22 @@ def fetch_account(acc, since, until):
             for a in (r.get("actions") or []):
                 if a.get("action_type") == "lead":
                     leads += int(float(a.get("value", 0)))
-            ad = (r.get("ad_name") or "").strip()
-            if not r.get("date_start") or not ad:
+            if not r.get("date_start") or not r.get("ad_id"):
                 continue
             out.append({
-                "date":   r["date_start"],
-                "acc":    acc["name"],
-                "camp":   (r.get("campaign_name") or "—").strip(),
-                "adset":  (r.get("adset_name") or "—").strip(),
-                "ad":     ad,
-                "spend":  float(r.get("spend") or 0),
-                "impr":   int(r.get("impressions") or 0),
-                "reach":  int(r.get("reach") or 0),
-                "clicks": int(r.get("clicks") or 0),
-                "leads":  leads,
+                "date":     r["date_start"],
+                "acc":      acc["name"],
+                "camp_id":  r.get("campaign_id", ""),
+                "camp":     (r.get("campaign_name") or "—").strip(),
+                "adset_id": r.get("adset_id", ""),
+                "adset":    (r.get("adset_name") or "—").strip(),
+                "ad_id":    r.get("ad_id", ""),
+                "ad":       (r.get("ad_name") or "").strip() or "— без имени —",
+                "spend":    float(r.get("spend") or 0),
+                "impr":     int(r.get("impressions") or 0),
+                "reach":    int(r.get("reach") or 0),
+                "clicks":   int(r.get("clicks") or 0),
+                "leads":    leads,
             })
     return out
 
@@ -169,19 +170,29 @@ def save_cache(d):
     with open(tmp, "w", encoding="utf-8") as f:
         json.dump(d, f, ensure_ascii=False, separators=(",", ":"))
     os.replace(tmp, CACHE_FILE)
-    n = sum(len(v) for v in d.values())
-    log.info("Кэш сақланди: %d кун · %d ёзув", len(d), n)
+    log.info("Кэш: %d кун · %d ёзув", len(d), sum(len(v) for v in d.values()))
 
-def refresh(days=7, min_date=None):
-    """Охирги N кунни Meta'дан қайта олади, эскиси кэшда қолади.
-    Meta ишламаса — эски кэш қайтарилади (дашборд бузилмайди)."""
+def refresh(days=7, min_date=None, rebuild=False):
+    """rebuild=True → min_date дан бугунгача ҲАММАСИНИ қайта тортади.
+    Номлар Meta'да ўзгартирилгандан кейин шуни ишлатиш керак —
+    Meta эски кунлар учун ҳам ЯНГИ номни қайтаради, тарих ҳам тузалади."""
     cache = load_cache()
     today = datetime.now(TZ).date()
-    since = (today - timedelta(days=days - 1)).strftime("%Y-%m-%d")
-    if min_date and since < min_date:
+    min_date = min_date or MIN_DATE or None
+
+    if rebuild:
+        if not min_date:
+            log.error("❌ --rebuild учун RS_MIN_DATE керак")
+            return cache
         since = min_date
+        log.info("♻️  REBUILD: %s дан бугунгача ҳаммаси қайта тортилади", since)
+    else:
+        since = (today - timedelta(days=days - 1)).strftime("%Y-%m-%d")
+        if min_date and since < min_date:
+            since = min_date
+
     until = today.strftime("%Y-%m-%d")
-    log.info("Meta: %s — %s олинмоқда", since, until)
+    log.info("Meta: %s — %s", since, until)
     try:
         fresh = fetch_range(since, until)
     except Exception as e:
@@ -190,13 +201,18 @@ def refresh(days=7, min_date=None):
     if not fresh:
         log.warning("⚠️ Meta бўш қайтди — эски кэш сақланади")
         return cache
-    cache.update(fresh)
+
+    if rebuild:
+        cache = fresh                      # тўлиқ алмаштирилади
+    else:
+        cache.update(fresh)                # фақат янги кунлар
+
     if min_date:
         cache = {k: v for k, v in cache.items() if k >= min_date}
     save_cache(cache)
     return cache
 
-# ═══════════════════ 4. roistat.py учун: ном → харажат ═══════════════════
+# ═══════════════════ 4. roistat.py учун ёрдамчилар ═══════════════════════
 def spend_by_ad(cache):
     """{(сана, ad_name_lower): {spend, impr, reach, clicks, leads}}"""
     out = {}
@@ -205,20 +221,43 @@ def spend_by_ad(cache):
             k = (d, r["ad"].strip().lower())
             m = out.setdefault(k, {"spend": 0.0, "impr": 0, "reach": 0,
                                    "clicks": 0, "leads": 0})
-            m["spend"]  += r["spend"]
-            m["impr"]   += r["impr"]
-            m["reach"]  += r["reach"]
-            m["clicks"] += r["clicks"]
-            m["leads"]  += r["leads"]
+            for f in ("spend", "impr", "reach", "clicks", "leads"):
+                m[f] += r.get(f, 0)
+    return out
+
+def spend_by_id(cache):
+    """{(сана, ad_id): {...}} — ном ўзгарса ҳам бузилмайди."""
+    out = {}
+    for d, rows in cache.items():
+        for r in rows:
+            if not r.get("ad_id"):
+                continue
+            k = (d, r["ad_id"])
+            m = out.setdefault(k, {"spend": 0.0, "impr": 0, "reach": 0,
+                                   "clicks": 0, "leads": 0, "ad": r["ad"]})
+            for f in ("spend", "impr", "reach", "clicks", "leads"):
+                m[f] += r.get(f, 0)
+    return out
+
+def id_to_name(cache):
+    """{ad_id: охирги ном} — қўлда улаш жадвали учун."""
+    out = {}
+    for d in sorted(cache):
+        for r in cache[d]:
+            if r.get("ad_id"):
+                out[r["ad_id"]] = r["ad"]
     return out
 
 # ══════════════════════════════ CLI ═══════════════════════════════════════
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--days", type=int, default=7)
-    ap.add_argument("--min-date", default=os.environ.get("RS_MIN_DATE", "").strip() or None)
-    ap.add_argument("--show", choices=["ad", "adset", "camp"], help="рўйхатни кўрсат")
-    ap.add_argument("--accounts", action="store_true", help="фақат кабинетлар")
+    ap.add_argument("--min-date", default=MIN_DATE or None)
+    ap.add_argument("--rebuild", action="store_true",
+                    help="бутун даврни қайта тортиш (номлар ўзгаргандан кейин)")
+    ap.add_argument("--show", choices=["ad", "adset", "camp"])
+    ap.add_argument("--accounts", action="store_true")
+    ap.add_argument("--ids", action="store_true", help="ad_id ↔ ном рўйхати")
     args = ap.parse_args()
 
     if not TOKEN:
@@ -228,19 +267,22 @@ if __name__ == "__main__":
         discover_accounts()
         sys.exit(0)
 
-    data = refresh(args.days, args.min_date)
+    if args.ids:
+        for i, n in sorted(id_to_name(load_cache()).items(), key=lambda x: x[1]):
+            print("%-20s %s" % (i, n))
+        sys.exit(0)
+
+    data = refresh(args.days, args.min_date, args.rebuild)
     if not data:
         sys.exit("❌ Маълумот йўқ")
 
-    field = {"ad": "ad", "adset": "adset", "camp": "camp"}.get(args.show or "ad")
+    field = args.show or "ad"
     agg = defaultdict(lambda: {"spend": 0.0, "impr": 0, "clicks": 0, "leads": 0})
     for d, rows in data.items():
         for r in rows:
             a = agg[r[field]]
-            a["spend"]  += r["spend"]
-            a["impr"]   += r["impr"]
-            a["clicks"] += r["clicks"]
-            a["leads"]  += r["leads"]
+            for f in ("spend", "impr", "clicks", "leads"):
+                a[f] += r.get(f, 0)
 
     total = sum(a["spend"] for a in agg.values())
     log.info("Жами: %d кун · %d %s · $%.2f", len(data), len(agg), field, total)
