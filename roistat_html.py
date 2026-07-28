@@ -1,5 +1,5 @@
 """
-ROISTAT v5 — HTML қатлами.
+ROISTAT v5 — HTML қатлами (ёруғ мавзу, Montserrat, графиклар пастда).
 roistat.py дан чақирилади: generate_html(...) ва push_github(...)
 """
 
@@ -12,112 +12,133 @@ log = logging.getLogger(__name__)
 HTML = """<!DOCTYPE html><html lang="ru"><head><meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>ROISTAT — Сквозная аналитика</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
 <style>
-:root{--bg:#0a0a0a;--card:#151515;--line:#262626;--txt:#f5f5f5;--mut:#888;--mut2:#555;
---gbg:#14331f;--gtx:#86efac;--abg:#3a2f0a;--atx:#fde68a;--rbg:#3a1414;--rtx:#fca5a5;--acc:#3b82f6}
+:root{--bg:#f4f6fa;--card:#fff;--line:#e4e9f0;--line2:#eef2f7;
+--txt:#0f172a;--mut:#64748b;--mut2:#94a3b8;
+--blue:#2563eb;--gtx:#15803d;--gbg:#dcfce7;--atx:#b45309;--abg:#fef3c7;
+--rtx:#b91c1c;--rbg:#fee2e2}
 *{box-sizing:border-box;margin:0;padding:0}
-body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;background:var(--bg);
-color:var(--txt);padding:18px;line-height:1.45;-webkit-font-smoothing:antialiased}
-.wrap{max-width:1620px;margin:0 auto}
-.top{display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:10px}
-h1{font-size:19px;font-weight:700;letter-spacing:-.02em}
-.sub{color:var(--mut);font-size:13px}.sub b{color:#bbb;font-weight:600}
-h2.sec{font-size:12px;letter-spacing:.08em;color:var(--mut);font-weight:600;
-text-transform:uppercase;margin:22px 0 12px}
-.bar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:14px}
-.btn{background:var(--card);border:1px solid var(--line);color:var(--mut);padding:9px 16px;
-border-radius:10px;font-size:14px;cursor:pointer;font-weight:500;transition:all .15s}
-.btn:hover{border-color:#3a3a3a;color:#bbb}
-.btn.on{background:#fff;color:#0a0a0a;border-color:#fff;font-weight:600}
+body{font-family:'Montserrat',-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;
+background:var(--bg);color:var(--txt);padding:20px;line-height:1.5;
+-webkit-font-smoothing:antialiased;font-variant-numeric:tabular-nums}
+.wrap{max-width:1640px;margin:0 auto}
+.top{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:12px;
+background:linear-gradient(120deg,#2563eb,#7c3aed);color:#fff;padding:18px 22px;
+border-radius:18px;box-shadow:0 6px 20px rgba(37,99,235,.22)}
+h1{font-size:20px;font-weight:800;letter-spacing:-.02em}
+.top .s1{font-size:13px;opacity:.9;font-weight:500;margin-top:2px}
+.top .s2{font-size:13px;text-align:right;opacity:.95;font-weight:500}
+.top b{font-weight:700}
+h2.sec{font-size:12px;letter-spacing:.07em;color:var(--mut);font-weight:700;
+text-transform:uppercase;margin:26px 0 12px}
+.bar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:16px}
+.btn{background:var(--card);border:1px solid var(--line);color:var(--mut);padding:9px 17px;
+border-radius:11px;font-size:14px;cursor:pointer;font-weight:600;font-family:inherit;
+transition:all .15s;box-shadow:0 1px 2px rgba(15,23,42,.04)}
+.btn:hover{border-color:#c7d2e0;color:var(--txt)}
+.btn.on{background:var(--blue);color:#fff;border-color:var(--blue);
+box-shadow:0 3px 10px rgba(37,99,235,.3)}
 .cur{margin-left:auto;display:flex;gap:6px}
-.dt{background:var(--card);border:1px solid var(--line);color:var(--txt);padding:8px 10px;
-border-radius:9px;font-size:13px;color-scheme:dark}
-.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(156px,1fr));gap:11px;margin-top:14px}
-.kpi{background:var(--card);border:1px solid var(--line);border-radius:15px;padding:14px 16px}
-.kpi .lab{color:var(--mut);font-size:12px;margin-bottom:6px}
-.kpi .val{font-size:23px;font-weight:700;letter-spacing:-.02em;word-break:break-word}
-.kpi .unit{color:var(--mut);font-size:12px;margin-top:2px}
-.kpi .delta{font-size:12px;margin-top:5px;font-weight:600}
+.dt{background:var(--card);border:1px solid var(--line);color:var(--txt);padding:8px 11px;
+border-radius:10px;font-size:13px;font-family:inherit;font-weight:500}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(163px,1fr));gap:12px;margin-top:14px}
+.kpi{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:15px 17px;
+box-shadow:0 1px 3px rgba(15,23,42,.05)}
+.kpi .lab{color:var(--mut);font-size:11.5px;margin-bottom:7px;font-weight:600;
+text-transform:uppercase;letter-spacing:.03em}
+.kpi .val{font-size:23px;font-weight:800;letter-spacing:-.02em;word-break:break-word;line-height:1.15}
+.kpi .unit{color:var(--mut);font-size:12px;margin-top:3px;font-weight:500}
+.kpi .delta{font-size:12px;margin-top:6px;font-weight:700}
 .up{color:var(--gtx)}.down{color:var(--rtx)}.flat{color:var(--mut2)}
-.kpi.hero{border-color:#1f3a26}
-.charts{display:grid;grid-template-columns:1fr 1.4fr;gap:12px;margin-top:14px}
-.chbox{background:var(--card);border:1px solid var(--line);border-radius:15px;padding:14px 16px}
-.chbox .t{font-size:12px;color:var(--mut);text-transform:uppercase;letter-spacing:.05em;margin-bottom:10px}
-.chwrap{position:relative;height:230px}
-.crumb{display:flex;gap:7px;align-items:center;flex-wrap:wrap;margin-top:14px;font-size:13px}
-.crumb a{color:var(--acc);cursor:pointer}.crumb a:hover{text-decoration:underline}
-.crumb span{color:var(--mut)}
-.panel{background:var(--card);border:1px solid var(--line);border-radius:15px;
-padding:4px 2px;overflow-x:auto;margin-top:6px}
+.kpi.hero{background:linear-gradient(135deg,#ecfdf5,#fff);border-color:#a7f3d0}
+.crumb{display:flex;gap:7px;align-items:center;flex-wrap:wrap;margin-top:14px;font-size:13.5px;
+font-weight:600}
+.crumb a{color:var(--blue);cursor:pointer}.crumb a:hover{text-decoration:underline}
+.crumb span{color:var(--mut2)}
+.panel{background:var(--card);border:1px solid var(--line);border-radius:16px;
+padding:2px;overflow-x:auto;margin-top:6px;box-shadow:0 1px 3px rgba(15,23,42,.05)}
 table{width:100%;border-collapse:collapse;min-width:1240px}
-th{text-align:right;color:var(--mut);font-size:11px;font-weight:600;padding:11px 10px;
-letter-spacing:.03em;text-transform:uppercase;border-bottom:1px solid var(--line);
-white-space:nowrap;cursor:pointer;user-select:none}
-th:hover{color:#ccc}th.srt{color:#fff}
+th{text-align:right;color:var(--mut);font-size:11px;font-weight:700;padding:13px 11px;
+letter-spacing:.04em;text-transform:uppercase;border-bottom:2px solid var(--line);
+white-space:nowrap;cursor:pointer;user-select:none;background:#fafbfd}
+th:hover{color:var(--blue)}th.srt{color:var(--blue)}
 th:first-child,td:first-child,th:nth-child(2),td:nth-child(2){text-align:left}
-td{padding:11px 10px;text-align:right;font-size:14px;border-bottom:1px solid #1d1d1d;white-space:nowrap}
+td{padding:12px 11px;text-align:right;font-size:14px;border-bottom:1px solid var(--line2);
+white-space:nowrap;font-weight:500}
 tr:last-child td{border-bottom:none}
-tbody tr:hover{background:#1a1a1a}
-tbody tr.fresh td{opacity:.55}tbody tr.mon td{color:#9aa}
+tbody tr:hover{background:#f8fafc}
+tbody tr.fresh td{color:var(--mut)}
+tbody tr.mon td{color:var(--mut)}
 tbody tr.drill{cursor:pointer}
-tbody tr.drill td:nth-child(2):after{content:' \\25B8';color:var(--acc)}
-td.name{font-weight:600}
-td.rank{color:var(--mut2);font-size:12px;width:36px;text-align:center}
-td.pos{color:var(--gtx)}
-tfoot td{padding:12px 10px;font-weight:700;font-size:14px;background:#101010;
+tbody tr.drill td:nth-child(2):after{content:' \\25B8';color:var(--blue);font-weight:800}
+td.name{font-weight:700}
+td.rank{color:var(--mut2);font-size:12px;width:38px;text-align:center;font-weight:600}
+td.pos{color:var(--gtx);font-weight:700}
+tfoot td{padding:14px 11px;font-weight:800;font-size:14px;background:#f1f5f9;
 border-top:2px solid var(--line);text-align:right}
 tfoot td:first-child,tfoot td:nth-child(2){text-align:left}
-.bd{display:inline-block;padding:3px 9px;border-radius:7px;font-size:12px;font-weight:600}
+.bd{display:inline-block;padding:3px 10px;border-radius:8px;font-size:12px;font-weight:700}
 .g{background:var(--gbg);color:var(--gtx)}.a{background:var(--abg);color:var(--atx)}
 .r{background:var(--rbg);color:var(--rtx)}
-.note{color:var(--mut);font-size:13px;margin-top:14px;padding:12px 16px;background:#121212;
-border-left:3px solid var(--acc);border-radius:0 8px 8px 0}
-.warn{border-left-color:#eab308}.warn b{color:var(--atx)}
-.foot{color:var(--mut2);font-size:12px;margin-top:22px;text-align:center}
-.empty{color:var(--mut);text-align:center;padding:34px;font-size:14px}
+.charts{display:grid;grid-template-columns:1fr 1.45fr;gap:14px;margin-top:14px}
+.chbox{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px 18px;
+box-shadow:0 1px 3px rgba(15,23,42,.05)}
+.chbox .t{font-size:12px;color:var(--mut);text-transform:uppercase;letter-spacing:.05em;
+margin-bottom:12px;font-weight:700}
+.chwrap{position:relative;height:250px}
+.note{color:var(--mut);font-size:13px;margin-top:16px;padding:13px 17px;background:#eef4ff;
+border-left:4px solid var(--blue);border-radius:0 10px 10px 0;font-weight:500}
+.warn{background:#fffbeb;border-left-color:#f59e0b}.warn b{color:var(--atx)}
+.foot{color:var(--mut2);font-size:12px;margin-top:24px;text-align:center;font-weight:500}
+.empty{color:var(--mut);text-align:center;padding:36px;font-size:14px;font-weight:600}
 .sortsel{display:none}
 @media(max-width:1100px){.charts{grid-template-columns:1fr}}
 @media(max-width:880px){
  body{padding:12px}h1{font-size:17px}
+ .top{padding:15px 17px;border-radius:15px}
+ .top .s2{text-align:left}
  .kpis{grid-template-columns:1fr 1fr;gap:9px}
- .kpi{padding:12px 13px;border-radius:13px}.kpi .val{font-size:19px}
- .btn{padding:8px 13px;font-size:13px}.cur{margin-left:0}
+ .kpi{padding:12px 14px;border-radius:14px}.kpi .val{font-size:19px}
+ .btn{padding:8px 14px;font-size:13px}.cur{margin-left:0}
  .sortsel{display:block;margin-top:10px}
- .panel{background:transparent;border:none;padding:0;overflow:visible}
+ .panel{background:transparent;border:none;padding:0;overflow:visible;box-shadow:none}
  table{min-width:0}table,thead,tbody,tfoot,tr,td{display:block}
  thead{display:none}
- tbody tr,tfoot tr{background:var(--card);border:1px solid var(--line);
-  border-radius:13px;margin-bottom:10px;padding:4px 0}
+ tbody tr,tfoot tr{background:var(--card);border:1px solid var(--line);border-radius:14px;
+  margin-bottom:10px;padding:4px 0;box-shadow:0 1px 3px rgba(15,23,42,.05)}
  tbody tr:hover{background:var(--card)}
- tbody tr.fresh{opacity:1;border-color:#3a2f0a}tbody tr.fresh td{opacity:.7}
+ tbody tr.fresh{border-color:#fcd34d}
  td,tfoot td{display:flex;justify-content:space-between;align-items:center;gap:12px;
-  text-align:right;border:none;padding:7px 15px;font-size:14px;white-space:normal;background:none}
- td:before,tfoot td:before{content:attr(data-l);color:var(--mut);font-size:12px;
-  text-align:left;flex:0 0 auto;text-transform:uppercase;letter-spacing:.03em}
+  text-align:right;border:none;padding:8px 16px;font-size:14px;white-space:normal;background:none}
+ td:before,tfoot td:before{content:attr(data-l);color:var(--mut);font-size:11.5px;
+  text-align:left;flex:0 0 auto;text-transform:uppercase;letter-spacing:.03em;font-weight:600}
  td.rank{display:none}
- td.name{font-size:15px;font-weight:700;padding:11px 15px;border-bottom:1px solid var(--line);
+ td.name{font-size:15px;font-weight:800;padding:12px 16px;border-bottom:1px solid var(--line);
   margin-bottom:3px;display:block;text-align:left}
  td.name:before{content:''}
- tfoot tr{border-color:#1f3a26}
+ tfoot tr{background:#f1f5f9;border-color:#cbd5e1}
  tfoot td:first-child{display:none}
  tfoot td:nth-child(2){display:block;text-align:left;font-size:13px;color:var(--mut);
   border-bottom:1px solid var(--line);margin-bottom:3px}
  tfoot td:nth-child(2):before{content:''}
+ .chwrap{height:270px}
 }
 </style></head><body><div class="wrap">
 
 <div class="top">
  <div><h1>ROISTAT — Сквозная аналитика</h1>
-  <div class="sub">Sinolife / Zextra · Колл-центр</div></div>
- <div class="sub" style="text-align:right">Обновлено: <b id="upd"></b><br>
-  Курс: <b id="rate"></b></div>
+  <div class="s1">Sinolife / Zextra · Колл-центр</div></div>
+ <div class="s2">Обновлено: <b id="upd"></b><br>Курс: <b id="rate"></b></div>
 </div>
 
 <div class="bar">
  <button class="btn" data-r="today">Сегодня</button>
  <button class="btn on" data-r="all">Все даты</button>
- <input type="date" id="f1" class="dt"><span class="sub">—</span>
+ <input type="date" id="f1" class="dt"><span style="color:var(--mut)">—</span>
  <input type="date" id="f2" class="dt">
  <button class="btn" id="go">Показать</button>
  <div class="cur"><button class="btn on" id="cU">сум</button><button class="btn" id="cD">$</button></div>
@@ -127,19 +148,17 @@ border-left:3px solid var(--acc);border-radius:0 8px 8px 0}
 <h2 class="sec">Общие показатели <span id="pl" style="text-transform:none;letter-spacing:0"></span></h2>
 <div class="kpis" id="kpis"></div>
 
-<div class="charts">
- <div class="chbox"><div class="t">Воронка</div><div class="chwrap"><canvas id="chF"></canvas></div></div>
- <div class="chbox"><div class="t">Динамика: расход и ROAS</div><div class="chwrap"><canvas id="chD"></canvas></div></div>
-</div>
-
 <div class="bar" id="tabs"></div>
 <div class="crumb" id="crumb"></div>
 <h2 class="sec" id="dt"></h2>
 <div class="sortsel"><select class="dt" id="ss" style="width:100%"></select></div>
 <div class="panel" id="tbl"></div>
 
-<div class="chbox" style="margin-top:12px"><div class="t" id="topT">Топ-5 по выручке</div>
- <div class="chwrap"><canvas id="chT"></canvas></div></div>
+<h2 class="sec">Графики</h2>
+<div class="charts">
+ <div class="chbox"><div class="t">Воронка</div><div class="chwrap"><canvas id="chF"></canvas></div></div>
+ <div class="chbox"><div class="t">Динамика: расход и ROAS</div><div class="chwrap"><canvas id="chD"></canvas></div></div>
+</div>
 
 <div class="note" id="hint"></div>
 <div class="foot">Sheets (рабочий + архив) + Meta Ads · Выручка привязана к дате лида</div>
@@ -205,7 +224,6 @@ function met(a){var r=D.rate;
   cpm:a.impr?a.spend/a.impr*1000:null,
   cpc:a.clicks?a.spend/a.clicks:null,
   freq:a.reach?a.impr/a.reach:null,
-  gap:a.mleads?a.mleads:null,
   roas:a.spend>0?(a.fact2/r)/a.spend:null}}
 
 function nf(v,d){return(v==null||isNaN(v))?'—':v.toLocaleString('ru-RU',
@@ -330,21 +348,21 @@ function crumb(){
  el.querySelectorAll('a[data-g]').forEach(function(a){
   a.onclick=function(){goDim(a.getAttribute('data-g'))}})}
 
-var GR='#1d1d1d',TC='#8a8a8a';
+var GR='#eef2f7',TC='#64748b';
 function draw(id,cfg){if(!window.Chart)return;
  if(CH[id]){CH[id].destroy();CH[id]=null}
  var e=document.getElementById(id);if(e)CH[id]=new Chart(e,cfg)}
 function bo(x){var o={responsive:true,maintainAspectRatio:false,
- plugins:{legend:{labels:{color:TC,font:{size:11},boxWidth:12}}},
- scales:{x:{ticks:{color:TC,font:{size:10}},grid:{color:GR}},
-  y:{ticks:{color:TC,font:{size:10}},grid:{color:GR}}}};
+ plugins:{legend:{labels:{color:TC,font:{size:11,family:'Montserrat',weight:'600'},boxWidth:12}}},
+ scales:{x:{ticks:{color:TC,font:{size:10,family:'Montserrat'}},grid:{color:GR}},
+  y:{ticks:{color:TC,font:{size:10,family:'Montserrat'}},grid:{color:GR}}}};
  if(x)for(var k in x)o[k]=x[k];return o}
 
 function funnel(c){draw('chF',{type:'bar',
  data:{labels:['Лиды','Чистые','Квал','Заказы','Продажи'],
   datasets:[{data:[c.leads,c.clean,c.kval,c.orders,c.sold],
-   backgroundColor:['#3b82f6cc','#06b6d4cc','#eab308cc','#f59e0bcc','#22c55ecc'],
-   borderRadius:6,borderSkipped:false}]},
+   backgroundColor:['#3b82f6','#06b6d4','#f59e0b','#f97316','#22c55e'],
+   borderRadius:8,borderSkipped:false}]},
  options:bo({indexAxis:'y',plugins:{legend:{display:false}}})})}
 
 function dayCh(p){
@@ -355,28 +373,15 @@ function dayCh(p){
   datasets:[
    {type:'bar',label:MODE==='usd'?'Расход, $':'Расход, сум',
     data:r.map(function(x){return MODE==='usd'?x.spend:x.spend*D.rate}),
-    backgroundColor:'#3b82f688',borderColor:'#3b82f6',yAxisID:'y',borderRadius:4},
+    backgroundColor:'#93c5fd',borderColor:'#2563eb',yAxisID:'y',borderRadius:5},
    {type:'line',label:'ROAS',
     data:r.map(function(x){return x.spend>0?+((x.fact2/D.rate)/x.spend).toFixed(2):null}),
-    borderColor:'#22c55e',backgroundColor:'#22c55e',yAxisID:'y1',
+    borderColor:'#16a34a',backgroundColor:'#16a34a',yAxisID:'y1',borderWidth:2.5,
     tension:.3,pointRadius:2,spanGaps:true}]},
   options:bo({scales:{
-   x:{ticks:{color:TC,font:{size:9},maxRotation:0,autoSkip:true},grid:{color:GR}},
-   y:{position:'left',ticks:{color:'#7aa7f0',font:{size:9}},grid:{color:GR}},
-   y1:{position:'right',ticks:{color:'#86efac',font:{size:9}},grid:{display:false}}}})})}
-
-function topCh(m){
- var a=Object.keys(m).map(function(k){return[k,m[k].fact2]})
-  .filter(function(x){return x[1]>0}).sort(function(x,y){return y[1]-x[1]}).slice(0,5);
- document.getElementById('topT').textContent='Топ-5 по выручке · '+LAB[DIM];
- if(!a.length){draw('chT',{type:'doughnut',data:{labels:[],datasets:[]}});return}
- draw('chT',{type:'doughnut',
-  data:{labels:a.map(function(x){return x[0].length>26?x[0].slice(0,26)+'…':x[0]}),
-   datasets:[{data:a.map(function(x){return MODE==='usd'?+(x[1]/D.rate).toFixed(2):x[1]}),
-    backgroundColor:['#22c55e','#06b6d4','#3b82f6','#eab308','#f97316'],
-    borderColor:'#151515',borderWidth:2}]},
-  options:{responsive:true,maintainAspectRatio:false,
-   plugins:{legend:{position:'right',labels:{color:TC,font:{size:11},boxWidth:12}}}}})}
+   x:{ticks:{color:TC,font:{size:9,family:'Montserrat'},maxRotation:0,autoSkip:true},grid:{color:GR}},
+   y:{position:'left',ticks:{color:'#2563eb',font:{size:9,family:'Montserrat'}},grid:{color:GR}},
+   y1:{position:'right',ticks:{color:'#16a34a',font:{size:9,family:'Montserrat'}},grid:{display:false}}}})})}
 
 function tabs(){var el=document.getElementById('tabs'),h='';
  for(var i=0;i<D.tabs.length;i++){var t=D.tabs[i];LAB[t.id]=t.label;
@@ -397,12 +402,12 @@ function render(){var p=per();
  document.getElementById('hint').innerHTML=
   'Качество = чистые / лиды · QL% = квал / лиды · Выкуп = Продажи / Заказы · '+
   'ROAS = Выручка / Расход · CAC = расход / новые клиенты · '+
-  '<span style="color:#9aa">До '+ru(D.dailyFrom)+' — помесячно.</span>';
+  '<span style="color:var(--mut2)">До '+ru(D.dailyFrom)+' — помесячно.</span>';
  document.querySelectorAll('#tabs .btn').forEach(function(b){
   b.classList.toggle('on',b.getAttribute('data-d')===DIM)});
  crumb();
- var c=kpis(p),m=table(p);
- funnel(c);dayCh(p);topCh(m||{})}
+ var c=kpis(p);table(p);
+ funnel(c);dayCh(p)}
 
 document.querySelectorAll('.bar .btn[data-r]').forEach(function(b){b.onclick=function(){
  RANGE=b.getAttribute('data-r');CF=CT=null;
