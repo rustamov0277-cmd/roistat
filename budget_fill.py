@@ -25,7 +25,8 @@ log = logging.getLogger(__name__)
 
 SA_JSON    = os.environ.get("RS_SA_JSON", "/root/roistat/service_account.json")
 SHEET_ID   = os.environ.get("RS_SHEET_BUDGET", "")
-BUDGET_TAB = os.environ.get("RS_BUDGET_TAB", "Таргет").strip()
+BUDGET_TAB = (os.environ.get("RS_BUDGET_FILL_TAB", "").strip()
+              or os.environ.get("RS_BUDGET_TAB", "Таргет").strip()) 	
 MIN_DATE   = os.environ.get("RS_MIN_DATE", "").strip()
 
 # ── Кабинет → (йўналиш блоки, таргетолог устуни) ─────────────────────────
