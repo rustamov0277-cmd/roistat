@@ -178,7 +178,7 @@ if __name__ == "__main__":
             skipped.add("устун " + g + "/" + t)
             continue
         total += spend
-        updates.append({"range": "%s!%s%d" % (ws.title, col_a1(c), r + 1),
+       updates.append({"range": "%s%d" % (col_a1(c), r + 1),
                         "values": [[round(spend, 2)]]})
 
     log.info("Ёзиладиган катак: %d, жами $%.2f", len(updates), total)
