@@ -2,15 +2,19 @@
 БЮДЖЕТ ТЎЛДИРГИЧ — Meta'дан кунлик харажатни «Target» варағига ёзади.
 Ҳар таргетолог ўз устунига, ҳар кун ўз қаторига.
 
-Organic / Telegram устунларига ТЕГМАЙДИ (уларда Meta реклама йўқ).
+ЯНГИ КАБИНЕТ: номидан йўналиш ва таргетолог автомат аниқланади.
+Аниқлаб бўлмаса — Telegram'га БИР МАРТА хабар келади.
+
+Organic / Telegram устунларига ТЕГМАЙДИ.
 
 Ишлатиш:
     python3 budget_fill.py --dry          # фақат кўрсатади, ёзмайди
-    python3 budget_fill.py                # охирги 7 кунни Meta'дан янгилаб ёзади
-    python3 budget_fill.py --days 31      # бутун ойни Meta'дан янгилаб ёзади
+    python3 budget_fill.py                # охирги 7 кунни янгилаб ёзади
+    python3 budget_fill.py --days 31      # бутун ойни янгилаб ёзади
 """
 
-import os, sys, argparse, logging
+import os, sys, json, argparse, logging
+import urllib.request, urllib.parse
 from collections import defaultdict
 from datetime import datetime, timezone, timedelta
 
@@ -31,33 +35,90 @@ MIN_DATE = os.environ.get("RS_MIN_DATE", "").strip()
 BUDGET_TAB = (os.environ.get("RS_BUDGET_FILL_TAB", "").strip()
               or os.environ.get("RS_BUDGET_TAB", "Target").strip())
 
-# ── Кабинет → (йўналиш блоки, таргетолог устуни) ─────────────────────────
-ACC_MAP_RAW = {
-    # CollagenMarine блоки
-    "collagen marine eldor":   ("collagenmarine", "элдор"),
-    "sinolife family eldor":   ("collagenmarine", "элдор"),
-    "umar 63":                 ("collagenmarine", "umar"),
-    "umar - 64":               ("collagenmarine", "umar"),
-    "timuro - sinolife 32":    ("collagenmarine", "timur"),
-    "timuro - sinolife 56":    ("collagenmarine", "timur"),
-    "collagen sobirjon":       ("collagenmarine", "sobirjon"),
-    # Zextra блоки
-    "zextra eldor":            ("zextra", "элдор"),
-    "zextra umar":             ("zextra", "umar"),
-    "timuro - zextra - 66":    ("zextra", "timur"),
-    "zextra sobirjon":         ("zextra", "sobirjon"),
-    "zextra kamron 1":         ("zextra", "kamron"),
-}
+TG_TOKEN   = os.environ.get("RS_TELEGRAM_TOKEN", "")
+TG_ADMINS  = [x.strip() for x in os.environ.get("RS_ADMIN_IDS", "").split(",") if x.strip()]
+ALERT_FILE = os.environ.get("RS_ALERT_FILE", "/root/roistat/budget_alerts.json")
 
 
 def norm(s):
-    """Кичик ҳарф + ортиқча бўшлиқларни бир бўшлиққа келтиради."""
+    """Кичик ҳарф + кетма-кет бўшлиқларни битта қилади."""
     return " ".join(str(s or "").strip().lower().split())
 
 
+# ══════════ Кабинет → (йўналиш блоки, таргетолог устуни) ═════════════════
+# Бу ерга ФАҚАТ номидан аниқлаб бўлмайдиганлари ёзилади.
+ACC_MAP_RAW = {
+    "umar 63":  ("collagenmarine", "umar"),
+    "umar - 64": ("collagenmarine", "umar"),
+}
 ACC_MAP = dict((norm(k), v) for k, v in ACC_MAP_RAW.items())
 
+# Таргетолог номи вариантлари (кирилл/лотин)
+TARG_ALIASES = [
+    ("eldor", "элдор"), ("элдор", "элдор"), ("эльдор", "элдор"),
+    ("umar", "umar"), ("умар", "umar"),
+    ("timur", "timur"), ("тимур", "timur"),
+    ("sobirjon", "sobirjon"), ("собиржон", "sobirjon"),
+    ("kamron", "kamron"), ("камрон", "kamron"),
+    ("abbos", "аббос"), ("аббос", "аббос"),
+]
 
+
+def guess_key(acc_name):
+    """Кабинет номидан йўналиш ва таргетологни тахмин қилади.
+    'Zextra Kamron 2' → (zextra, kamron)
+    'Collagen marine Eldor' → (collagenmarine, элдор)"""
+    n = norm(acc_name)
+    if "zextra" in n:
+        g = "zextra"
+    elif "collagen" in n or "sinolife" in n:
+        g = "collagenmarine"
+    else:
+        return None
+    for word, canon in TARG_ALIASES:
+        if word in n:
+            return (g, canon)
+    return None
+
+
+def acc_key(acc_name):
+    """Аввал қўлда ёзилган ACC_MAP, бўлмаса номидан тахмин."""
+    return ACC_MAP.get(norm(acc_name)) or guess_key(acc_name)
+
+
+# ══════════════════════════ Telegram огоҳлантириш ════════════════════════
+def tg_send(text):
+    if not TG_TOKEN or not TG_ADMINS:
+        log.warning("Telegram созланмаган — хабар юборилмади")
+        return
+    for aid in TG_ADMINS:
+        try:
+            url = "https://api.telegram.org/bot%s/sendMessage" % TG_TOKEN
+            body = urllib.parse.urlencode({"chat_id": aid, "text": text[:4000]}).encode()
+            urllib.request.urlopen(urllib.request.Request(url, data=body), timeout=15)
+        except Exception as e:
+            log.error("TG: %s", e)
+
+
+def new_alerts(names):
+    """Фақат ЯНГИ кабинетларни қайтаради (такрор хабар бўлмасин)."""
+    try:
+        with open(ALERT_FILE, encoding="utf-8") as f:
+            seen = set(json.load(f))
+    except Exception:
+        seen = set()
+    fresh = [n for n in names if n not in seen]
+    if fresh:
+        seen.update(fresh)
+        try:
+            with open(ALERT_FILE, "w", encoding="utf-8") as f:
+                json.dump(sorted(seen), f, ensure_ascii=False)
+        except Exception as e:
+            log.error("alert файл: %s", e)
+    return fresh
+
+
+# ══════════════════════════ Ёрдамчилар ══════════════════════════════════
 def parse_date(v):
     s = str(v or "").strip().split(" ")[0]
     if not s:
@@ -83,7 +144,7 @@ def parse_date(v):
 
 
 def col_a1(idx):
-    """0 → A, 1 → B, 25 → Z, 26 → AA"""
+    """0 → A, 25 → Z, 26 → AA"""
     s = ""
     idx += 1
     while idx:
@@ -109,8 +170,7 @@ def find_ws(book, tab):
 
 
 def build_layout(vals):
-    """1-қатор = блок номи (бирлаштирилган), 2-қатор = таргетолог, A устуни = сана.
-    Қайтаради: {(блок, таргетолог): устун_индекси}, {сана: қатор_индекси}"""
+    """1-қатор = блок номи, 2-қатор = таргетолог, A устуни = сана."""
     if len(vals) < 3:
         raise RuntimeError("Варақ жуда қисқа — сарлавҳа қаторлари йўқ")
 
@@ -146,20 +206,44 @@ def meta_by_day(days):
     cache = MS.refresh(days, MIN_DATE or None)
     out = defaultdict(float)
     unknown = defaultdict(float)
+    guessed = {}
+
     for d, items in (cache or {}).items():
         for r in items:
-            key = ACC_MAP.get(norm(r.get("acc")))
+            acc = r.get("acc", "?")
+            key = acc_key(acc)
             if key:
                 out[(d, key[0], key[1])] += r.get("spend", 0)
+                if norm(acc) not in ACC_MAP:
+                    guessed[acc] = key
             else:
-                unknown[r.get("acc", "?")] += r.get("spend", 0)
+                unknown[acc] += r.get("spend", 0)
+
+    if guessed:
+        log.info("Номидан аниқланган кабинетлар:")
+        for a, k in sorted(guessed.items()):
+            log.info("   %-30s → %s / %s", a[:30], k[0], k[1])
+
     if unknown:
-        log.warning("⚠️ ACC_MAP'да йўқ кабинетлар (ёзилмади):")
+        log.warning("⚠️ Устуни аниқланмаган кабинетлар (ёзилмади):")
         for a, s in sorted(unknown.items(), key=lambda x: -x[1]):
             log.warning("   $%9.2f  %s", s, a)
+        fresh = new_alerts(list(unknown.keys()))
+        if fresh:
+            lines = ["⚠️ ЯНГИ РЕКЛАМА КАБИНЕТИ", "",
+                     "Устуни аниқланмади — Target варағига ёзилмаяпти:", ""]
+            for a in fresh:
+                lines.append("• %s — $%.2f" % (a, unknown[a]))
+            lines += ["", "Ечим: кабинет номига йўналиш (zextra / collagen) ва",
+                      "таргетолог исмини қўшинг, ёки budget_fill.py даги",
+                      "ACC_MAP га қўлда ёзинг."]
+            tg_send("\n".join(lines))
+            log.info("📨 Telegram'га хабар юборилди: %d та янги кабинет", len(fresh))
+
     return out
 
 
+# ══════════════════════════ MAIN ════════════════════════════════════════
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--days", type=int, default=7)
@@ -202,8 +286,8 @@ if __name__ == "__main__":
             skipped.add("устун " + g + "/" + t)
             continue
         total += spend
-        cell = col_a1(c) + str(r + 1)
-        updates.append({"range": cell, "values": [[round(spend, 2)]]})
+        updates.append({"range": col_a1(c) + str(r + 1),
+                        "values": [[round(spend, 2)]]})
 
     log.info("Ёзиладиган катак: %d, жами $%.2f", len(updates), total)
     if skipped:
