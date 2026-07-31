@@ -2,16 +2,14 @@
 META қатлами — Campaign / Ad set / Ad даражасида кунлик рақамлар.
 Business Manager'даги БАРЧА кабинетни ўзи топади.
 
-Кэш: /root/roistat/meta_spend.json
-  {"2026-07-25":[{"ad_id":"...","ad":"...","camp":"...","adset":"...",
-                  "acc":"...","spend":12.5,"impr":4200,"reach":3100,
-                  "clicks":130,"leads":8}]}
+ХАВФСИЗЛИК: битта кабинет вақтинча ишламаса, унинг ЭСКИ маълумоти
+кэшда сақланиб қолади (аввал ўчиб кетарди).
 
 Ишлатиш:
   python3 meta_spend.py --accounts        # кабинетлар топиладими
   python3 meta_spend.py --days 3 --show ad
   python3 meta_spend.py --rebuild         # БУТУН даврни қайта тортиш
-                                          # (номлар ўзгартирилгандан кейин!)
+                                          # (креатив номлари ўзгаргандан кейин)
 """
 
 import os, sys, json, time, argparse, logging
@@ -30,19 +28,38 @@ BM_ID      = os.environ.get("RS_META_BUSINESS_ID", "").strip()
 MIN_DATE   = os.environ.get("RS_MIN_DATE", "").strip()
 CHUNK_DAYS = int(os.environ.get("RS_META_CHUNK", "7"))
 
+TG_TOKEN   = os.environ.get("RS_TELEGRAM_TOKEN", "")
+TG_ADMINS  = [x.strip() for x in os.environ.get("RS_ADMIN_IDS", "").split(",") if x.strip()]
+
+
+def tg_send(text):
+    if not TG_TOKEN or not TG_ADMINS:
+        return
+    for aid in TG_ADMINS:
+        try:
+            url = "https://api.telegram.org/bot%s/sendMessage" % TG_TOKEN
+            body = urllib.parse.urlencode({"chat_id": aid, "text": text[:4000]}).encode()
+            urllib.request.urlopen(urllib.request.Request(url, data=body), timeout=15)
+        except Exception as e:
+            log.error("TG: %s", e)
+
+
 # ══════════════════════════════ HTTP ══════════════════════════════════════
 def _get(url, params=None, tries=4):
     if params:
         url = url + ("&" if "?" in url else "?") + urllib.parse.urlencode(params)
     for attempt in range(tries):
         try:
-            req = urllib.request.Request(url, headers={"User-Agent": "roistat-meta/3.0"})
+            req = urllib.request.Request(url, headers={"User-Agent": "roistat-meta/4.0"})
             with urllib.request.urlopen(req, timeout=90) as r:
                 return json.loads(r.read().decode("utf-8"))
         except urllib.error.HTTPError as e:
             body = e.read().decode("utf-8", errors="ignore")
-            if (e.code in (429, 500, 503) or '"code":17' in body or '"code":613' in body) \
-               and attempt < tries - 1:
+            transient = (e.code in (429, 500, 503)
+                         or '"code":17' in body
+                         or '"code":613' in body
+                         or '"code":2' in body)
+            if transient and attempt < tries - 1:
                 wait = 30 * (attempt + 1)
                 log.warning("Лимит/хато %s — %d сония кутаман", e.code, wait)
                 time.sleep(wait)
@@ -55,6 +72,7 @@ def _get(url, params=None, tries=4):
             raise
     return {}
 
+
 def _paged(url, params, cap=200):
     out, pages = [], 0
     data = _get(url, params)
@@ -66,6 +84,7 @@ def _paged(url, params, cap=200):
             break
         data = _get(nxt)
     return out
+
 
 # ══════════════════════════ 1. Кабинетлар ════════════════════════════════
 def discover_accounts():
@@ -88,9 +107,11 @@ def discover_accounts():
         log.warning("⚠️ %d кабинет USD'да эмас — харажат нотўғри қўшилади", len(bad))
     return accs
 
+
 # ══════════════════════ 2. Кунлик × Ad даражаси ══════════════════════════
 FIELDS = ("date_start,campaign_id,campaign_name,adset_id,adset_name,"
           "ad_id,ad_name,spend,impressions,reach,clicks,actions")
+
 
 def _chunks(since, until, n):
     a = datetime.strptime(since, "%Y-%m-%d").date()
@@ -99,6 +120,7 @@ def _chunks(since, until, n):
         c = min(a + timedelta(days=n - 1), b)
         yield a.strftime("%Y-%m-%d"), c.strftime("%Y-%m-%d")
         a = c + timedelta(days=1)
+
 
 def fetch_account(acc, since, until):
     url = "https://graph.facebook.com/%s/%s/insights" % (API_VER, acc["id"])
@@ -136,24 +158,37 @@ def fetch_account(acc, since, until):
             })
     return out
 
+
 def fetch_range(since, until):
+    """Қайтаради: ({сана: [ёзувлар]}, муваффақиятли кабинет номлари тўплами)"""
     if not TOKEN:
         raise RuntimeError("META_ACCESS_TOKEN ўрнатилмаган (start.sh)")
     accs = discover_accounts()
     by_date = defaultdict(list)
-    ok = 0
+    ok_names, failed = set(), []
     for a in accs:
         try:
             rows = fetch_account(a, since, until)
         except Exception as e:
             log.error("   ❌ %-28s %s", a["name"][:28], str(e)[:180])
+            failed.append(a["name"])
             continue
         for r in rows:
             by_date[r["date"]].append(r)
         log.info("   ✅ %-28s %d ёзув", a["name"][:28], len(rows))
-        ok += 1
-    log.info("Кабинет: %d/%d ўқилди · %d кун", ok, len(accs), len(by_date))
-    return dict(by_date)
+        ok_names.add(a["name"])
+
+    log.info("Кабинет: %d/%d ўқилди · %d кун", len(ok_names), len(accs), len(by_date))
+    if failed:
+        log.warning("⚠️ Ўқилмаган кабинетлар — уларнинг ЭСКИ маълумоти сақланади:")
+        for f in failed:
+            log.warning("   • %s", f)
+        tg_send("⚠️ ROISTAT — Meta кабинети ўқилмади\n\n" +
+                "\n".join("• " + f for f in failed) +
+                "\n\nЭски маълумот сақланди, рақамлар тушмайди.\n"
+                "Кўп такрорланса — токенни текширинг.")
+    return dict(by_date), ok_names
+
 
 # ══════════════════════════════ 3. Кэш ════════════════════════════════════
 def load_cache():
@@ -165,6 +200,7 @@ def load_cache():
             log.error("Кэш ўқилмади: %s", e)
     return {}
 
+
 def save_cache(d):
     tmp = CACHE_FILE + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
@@ -172,10 +208,10 @@ def save_cache(d):
     os.replace(tmp, CACHE_FILE)
     log.info("Кэш: %d кун · %d ёзув", len(d), sum(len(v) for v in d.values()))
 
+
 def refresh(days=7, min_date=None, rebuild=False):
-    """rebuild=True → min_date дан бугунгача ҲАММАСИНИ қайта тортади.
-    Номлар Meta'да ўзгартирилгандан кейин шуни ишлатиш керак —
-    Meta эски кунлар учун ҳам ЯНГИ номни қайтаради, тарих ҳам тузалади."""
+    """Кэшни КАБИНЕТ-КАБИНЕТ янгилайди.
+    Ишламаган кабинетнинг эски ёзувлари ўчмайди — шу энг муҳим ҳимоя."""
     cache = load_cache()
     today = datetime.now(TZ).date()
     min_date = min_date or MIN_DATE or None
@@ -185,7 +221,7 @@ def refresh(days=7, min_date=None, rebuild=False):
             log.error("❌ --rebuild учун RS_MIN_DATE керак")
             return cache
         since = min_date
-        log.info("♻️  REBUILD: %s дан бугунгача ҳаммаси қайта тортилади", since)
+        log.info("♻️  REBUILD: %s дан бугунгача", since)
     else:
         since = (today - timedelta(days=days - 1)).strftime("%Y-%m-%d")
         if min_date and since < min_date:
@@ -193,24 +229,39 @@ def refresh(days=7, min_date=None, rebuild=False):
 
     until = today.strftime("%Y-%m-%d")
     log.info("Meta: %s — %s", since, until)
+
     try:
-        fresh = fetch_range(since, until)
+        fresh, ok_names = fetch_range(since, until)
     except Exception as e:
         log.error("⚠️ Meta олинмади (%s) — эски кэш ишлатилади", str(e)[:200])
         return cache
-    if not fresh:
-        log.warning("⚠️ Meta бўш қайтди — эски кэш сақланади")
+
+    if not ok_names:
+        log.warning("⚠️ Бирорта кабинет ўқилмади — эски кэш сақланади")
         return cache
 
-    if rebuild:
-        cache = fresh                      # тўлиқ алмаштирилади
-    else:
-        cache.update(fresh)                # фақат янги кунлар
+    # ── ойна ичидаги ҳар кун учун: фақат ЎҚИЛГАН кабинетлар алмаштирилади
+    d0 = datetime.strptime(since, "%Y-%m-%d").date()
+    d1 = datetime.strptime(until, "%Y-%m-%d").date()
+    kept_total = 0
+    while d0 <= d1:
+        day = d0.strftime("%Y-%m-%d")
+        keep = [r for r in cache.get(day, []) if r.get("acc") not in ok_names]
+        new = fresh.get(day, [])
+        kept_total += len(keep)
+        if keep or new:
+            cache[day] = keep + new
+        d0 += timedelta(days=1)
+
+    if kept_total:
+        log.info("Сақлаб қолинди (ўқилмаган кабинетлардан): %d ёзув", kept_total)
 
     if min_date:
-        cache = {k: v for k, v in cache.items() if k >= min_date}
+        cache = dict((k, v) for k, v in cache.items() if k >= min_date)
+
     save_cache(cache)
     return cache
+
 
 # ═══════════════════ 4. roistat.py учун ёрдамчилар ═══════════════════════
 def spend_by_ad(cache):
@@ -224,6 +275,7 @@ def spend_by_ad(cache):
             for f in ("spend", "impr", "reach", "clicks", "leads"):
                 m[f] += r.get(f, 0)
     return out
+
 
 def spend_by_id(cache):
     """{(сана, ad_id): {...}} — ном ўзгарса ҳам бузилмайди."""
@@ -239,8 +291,9 @@ def spend_by_id(cache):
                 m[f] += r.get(f, 0)
     return out
 
+
 def id_to_name(cache):
-    """{ad_id: охирги ном} — қўлда улаш жадвали учун."""
+    """{ad_id: охирги ном}"""
     out = {}
     for d in sorted(cache):
         for r in cache[d]:
@@ -248,13 +301,14 @@ def id_to_name(cache):
                 out[r["ad_id"]] = r["ad"]
     return out
 
+
 # ══════════════════════════════ CLI ═══════════════════════════════════════
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--days", type=int, default=7)
     ap.add_argument("--min-date", default=MIN_DATE or None)
     ap.add_argument("--rebuild", action="store_true",
-                    help="бутун даврни қайта тортиш (номлар ўзгаргандан кейин)")
+                    help="бутун даврни қайта тортиш")
     ap.add_argument("--show", choices=["ad", "adset", "camp"])
     ap.add_argument("--accounts", action="store_true")
     ap.add_argument("--ids", action="store_true", help="ad_id ↔ ном рўйхати")
