@@ -1,16 +1,18 @@
 """
 Bitrix стадия аналитикаси — кунлик A → B.
-  A = C6:NEW   (Подготовка товара)  — шу кун воронкага кирган сделкалар
+  A = C6:NEW   (Подготовка товара)  — шу кун стадияга ТУШГАН сделкалар
+                                      (кейин бошқа стадияга ўтса ҳам саналади)
   B = C6:WON   (Доставлено)         — улардан кейинчалик етказилганлари
 
 Натижа: дата база шитсидаги «Стадия» варағи.
-A ўтган кун учун ҚУЛФЛАНАДИ, B охирги 30 кун учун ҳар соат қайта ҳисобланади.
+  • A ўтган кун учун ҚУЛФЛАНАДИ — бошқа ўзгармайди
+  • B охирги 30 кун учун ҳар соат қайта ҳисобланади
 
     cd /root/roistat && source start.sh && python3 bitrix_stages.py
 """
 
 import os, sys, json, time, logging
-import urllib.request, urllib.error
+import urllib.request, urllib.error, urllib.parse
 from datetime import datetime, timezone, timedelta
 from collections import defaultdict
 
@@ -29,7 +31,9 @@ MIN_DATE  = os.environ.get("RS_MIN_DATE", "").strip() or "2026-07-01"
 
 STAGE_A   = os.environ.get("RS_STAGE_A", "C6:NEW")
 STAGE_B   = os.environ.get("RS_STAGE_B", "C6:WON")
-RECALC_B  = int(os.environ.get("RS_STAGE_RECALC", "30"))   # B неча кун қайта ҳисобланади
+CATEGORY  = os.environ.get("RS_STAGE_CATEGORY", "6")
+RECALC_B  = int(os.environ.get("RS_STAGE_RECALC", "30"))
+PAGE_PAUSE = float(os.environ.get("RS_STAGE_PAUSE", "0.4"))
 
 TG_TOKEN  = os.environ.get("RS_TELEGRAM_TOKEN", "")
 TG_ADMINS = [x.strip() for x in os.environ.get("RS_ADMIN_IDS", "").split(",") if x.strip()]
@@ -40,7 +44,6 @@ HEADERS = ["Sana", "A (kirgan)", "B (yetkazilgan)", "Konversiya %", "Yangilandi"
 def tg(text):
     if not TG_TOKEN or not TG_ADMINS:
         return
-    import urllib.parse
     for aid in TG_ADMINS:
         try:
             u = "https://api.telegram.org/bot%s/sendMessage" % TG_TOKEN
@@ -52,7 +55,7 @@ def tg(text):
 
 # ══════════════════════════ Bitrix ═══════════════════════════════════════
 def bx(method, params=None, tries=4):
-    """TLS баъзан қотиб қолади — қайта уринади."""
+    """TLS баъзан қотиб қолади — қайта уринади (20 → 40 → 60 сония)."""
     url = WEBHOOK + method + ".json"
     data = json.dumps(params or {}).encode("utf-8")
     for attempt in range(tries):
@@ -72,13 +75,22 @@ def bx(method, params=None, tries=4):
 
 
 def fetch_history(since):
-    """Стадия тарихини ўқийди: [{owner, stage, date}]"""
-    out, start, page = [], 0, 0
-    while True:
+    """Стадия тарихи — ЯНГИСИДАН эскисига, since'га етганда тўхтайди.
+    (Bitrix CREATED_TIME филтрини эътиборга олмайди, шунинг учун шундай.)"""
+    out, start, page, seen = [], 0, 0, 0
+    stop = False
+    flt = {}
+    if CATEGORY:
+        try:
+            flt["CATEGORY_ID"] = int(CATEGORY)
+        except ValueError:
+            pass
+
+    while not stop:
         resp = bx("crm.stagehistory.list", {
             "entityTypeId": 2,
-            "order": {"ID": "ASC"},
-            "filter": {">=CREATED_TIME": since + "T00:00:00"},
+            "order": {"ID": "DESC"},
+            "filter": flt,
             "select": ["ID", "OWNER_ID", "CREATED_TIME", "STAGE_ID", "CATEGORY_ID"],
             "start": start,
         })
@@ -86,29 +98,38 @@ def fetch_history(since):
             raise RuntimeError(resp.get("error_description", resp["error"]))
         res = resp.get("result")
         items = res.get("items", []) if isinstance(res, dict) else (res or [])
+        if not items:
+            break
+
         for it in items:
-            st = it.get("STAGE_ID") or ""
-            if st not in (STAGE_A, STAGE_B):
-                continue
+            seen += 1
             d = (it.get("CREATED_TIME") or "")[:10]
             if not d:
                 continue
-            out.append({"owner": str(it.get("OWNER_ID")), "stage": st, "date": d})
-        nxt = resp.get("next")
+            if d < since:                     # эскисига етдик
+                stop = True
+                break
+            st = it.get("STAGE_ID") or ""
+            if st in (STAGE_A, STAGE_B):
+                out.append({"owner": str(it.get("OWNER_ID")), "stage": st, "date": d})
+
         page += 1
-        if not nxt:
+        if page % 10 == 0:
+            log.info("   ... %d саҳифа · кўрилди %d · керакли %d", page, seen, len(out))
+        nxt = resp.get("next")
+        if not nxt or stop:
             break
         start = nxt
-        if page % 20 == 0:
-            log.info("   ... %d саҳифа, %d ёзув", page, len(out))
-    log.info("Тарих: %d ёзув (%s ва %s)", len(out), STAGE_A, STAGE_B)
+        time.sleep(PAGE_PAUSE)                # Bitrix чекловига урилмаслик учун
+
+    log.info("Тарих: %d керакли ёзув (%d кўрилди, %d саҳифа)", len(out), seen, page)
     return out
 
 
 def compute(hist):
-    """{сана: (A, B)} — B сделканинг A санасига ёзилади."""
-    first_a = {}                    # owner → A га биринчи тушган сана
-    reached_b = set()               # B га етган owner'лар
+    """{сана: A}, {сана: B} — B сделканинг A санасига ёзилади."""
+    first_a = {}
+    reached_b = set()
     for h in hist:
         if h["stage"] == STAGE_A:
             o = h["owner"]
@@ -117,14 +138,15 @@ def compute(hist):
         else:
             reached_b.add(h["owner"])
 
-    a_cnt = defaultdict(int)
-    b_cnt = defaultdict(int)
+    a_cnt, b_cnt = defaultdict(int), defaultdict(int)
     for o, d in first_a.items():
         a_cnt[d] += 1
         if o in reached_b:
             b_cnt[d] += 1
-    log.info("Кунлар: %d · жами A=%d · B=%d",
-             len(a_cnt), sum(a_cnt.values()), sum(b_cnt.values()))
+
+    ta, tb = sum(a_cnt.values()), sum(b_cnt.values())
+    log.info("Кунлар: %d · жами A=%d · B=%d (%.1f%%)",
+             len(a_cnt), ta, tb, (tb / ta * 100) if ta else 0)
     return a_cnt, b_cnt
 
 
@@ -154,7 +176,7 @@ def iso(s):
     s = str(s or "").strip()
     if not s:
         return None
-    if "-" in s and len(s) >= 10 and s[4] == "-":
+    if len(s) >= 10 and s[4] == "-":
         return s[:10]
     p = s.split(".")
     if len(p) == 3:
@@ -170,20 +192,27 @@ def _num(v):
     return int(s) if s.isdigit() else None
 
 
+# ══════════════════════════ MAIN ═════════════════════════════════════════
 if __name__ == "__main__":
     if not os.environ.get("BITRIX_WEBHOOK"):
         sys.exit("❌ BITRIX_WEBHOOK ўрнатилмаган (start.sh)")
     if not SHEET_ID:
         sys.exit("❌ RS_STAGE_SHEET ёки RS_SHEET_BUDGET ўрнатилмаган")
 
-    log.info("=== Стадия аналитикаси: %s → %s ===", STAGE_A, STAGE_B)
+    log.info("=== Стадия: %s → %s · %s дан ===", STAGE_A, STAGE_B, MIN_DATE)
+    t0 = time.time()
+
     try:
         hist = fetch_history(MIN_DATE)
     except Exception as e:
         msg = "⚠️ Стадия: Bitrix'дан олинмади — " + str(e)[:200]
         log.error(msg)
-        tg(msg + "\n\nЭски маълумот сақланди.")
+        tg(msg + "\n\nЭски маълумот сақланиб қолди.")
         sys.exit(1)
+
+    if not hist:
+        log.warning("⚠️ Тарих бўш — эски маълумот сақланади")
+        sys.exit(0)
 
     a_new, b_new = compute(hist)
 
@@ -191,7 +220,6 @@ if __name__ == "__main__":
     ws = ensure_ws(book)
     vals = ws.get_all_values()
 
-    # мавжуд қаторлар: {сана: [A, B]}
     old = {}
     for r in vals[1:]:
         d = iso(r[0] if r else "")
@@ -199,13 +227,14 @@ if __name__ == "__main__":
             old[d] = [_num(r[1] if len(r) > 1 else ""),
                       _num(r[2] if len(r) > 2 else "")]
 
-    today = datetime.now(TZ).strftime("%Y-%m-%d")
+    today  = datetime.now(TZ).strftime("%Y-%m-%d")
     b_from = (datetime.now(TZ) - timedelta(days=RECALC_B)).strftime("%Y-%m-%d")
 
     dates = sorted(set(list(a_new.keys()) + list(old.keys())))
     dates = [d for d in dates if d >= MIN_DATE]
 
     rows, froze_a, upd_b = [], 0, 0
+    now_s = datetime.now(TZ).strftime("%d.%m.%Y %H:%M")
     for d in dates:
         o_a, o_b = old.get(d, [None, None])
 
@@ -214,7 +243,7 @@ if __name__ == "__main__":
             a = o_a
             froze_a += 1
         else:
-            a = a_new.get(d, o_a or 0)
+            a = a_new.get(d, o_a if o_a is not None else 0)
 
         # ── B: охирги RECALC_B кун қайта ҳисобланади, эскиси қотади
         if d >= b_from:
@@ -225,16 +254,18 @@ if __name__ == "__main__":
             b = o_b if o_b is not None else b_new.get(d, 0)
 
         conv = round(b / a * 100, 1) if a else 0
-        rows.append([ru(d), a, b, conv,
-                     datetime.now(TZ).strftime("%d.%m.%Y %H:%M")])
+        rows.append([ru(d), a, b, conv, now_s])
+
+    rows.sort(key=lambda r: iso(r[0]), reverse=True)   # янгиси юқорида
 
     ws.clear()
     ws.append_row(HEADERS)
     if rows:
         ws.append_rows(rows, value_input_option="USER_ENTERED")
 
-    tot_a = sum(r[1] for r in rows)
-    tot_b = sum(r[2] for r in rows)
-    log.info("✅ Ёзилди: %d кун · A=%d · B=%d (%.1f%%) · қулфланган A: %d · янгиланган B: %d",
-             len(rows), tot_a, tot_b, (tot_b / tot_a * 100) if tot_a else 0,
-             froze_a, upd_b)
+    ta = sum(r[1] for r in rows)
+    tb = sum(r[2] for r in rows)
+    log.info("✅ Ёзилди: %d кун · A=%d · B=%d (%.1f%%) · қулфланган A: %d · "
+             "янгиланган B: %d · %.0f сония",
+             len(rows), ta, tb, (tb / ta * 100) if ta else 0,
+             froze_a, upd_b, time.time() - t0)
